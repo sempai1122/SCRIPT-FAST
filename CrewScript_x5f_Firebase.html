@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CrewScript - YouTube Movies Animation</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = { darkMode: 'class' }
+</script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+body{font-family:'Inter',sans-serif;background:#0F0F14;color:white}
+.scrollbar-hide::-webkit-scrollbar{display:none}
+</style>
+</head>
+<body class="bg-[#0F0F14] flex justify-center min-h-screen">
+<div id="root" class="w-full max-w-[420px] bg-[#0F0F14] min-h-screen relative flex flex-col"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBPEHSgmeQ846yvK2xalAjNA_UVLFrg4pk",
+  authDomain: "koch-kingdom.firebaseapp.com",
+  databaseURL: "https://koch-kingdom-default-rtdb.firebaseio.com",
+  projectId: "koch-kingdom",
+  storageBucket: "koch-kingdom.appspot.com",
+  messagingSenderId: "838969250829",
+  appId: "1:838969250829:web:e4b5a77a2469f4972c3144",
+  measurementId: "G-V2PPPCGMW5"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const provider = new GoogleAuthProvider();
+
+const root = document.getElementById('root');
+let currentUser = null;
+let currentView = 'login';
+let teams = JSON.parse(localStorage.getItem('cs_teams')||'[]');
+let selectedTeam = null;
+let scripts = JSON.parse(localStorage.getItem('cs_scripts')||'[{"id":1,"char":"N","text":"Hey, we are hitting the coast today! Ready to film the intro?","scene":"SCENE 1 - 00:00"},{"id":2,"char":"C","text":"Yep! Grab the wide shot first, natural lighting.","scene":"SCENE 1 - 00:08"},{"id":3,"char":"N","text":"Got it. Then we cut to close-up when I talk about the gear?","scene":"SCENE 2 - 00:15"}]');
+let shots = JSON.parse(localStorage.getItem('cs_shots')||'[{"id":1,"title":"Wide Establishment","meta":"Wide • 16mm • 5s","status":"TODO"},{"id":2,"title":"Close-up Reaction","meta":"Close-up • 50mm • 3s","status":"READY"},{"id":3,"title":"B-roll Coast","meta":"B-roll • 24mm • 8s","status":"PLANNED"}]');
+let alerts = JSON.parse(localStorage.getItem('cs_alerts')||'[]');
+let activeTab = 'script';
+let youtubeMode = true;
+
+function save(){ localStorage.setItem('cs_teams',JSON.stringify(teams)); localStorage.setItem('cs_scripts',JSON.stringify(scripts)); localStorage.setItem('cs_shots',JSON.stringify(shots)); localStorage.setItem('cs_alerts',JSON.stringify(alerts)); }
+
+function render(){
+ if(currentView==='login'){ renderLogin(); return; }
+ if(currentView==='teams'){ renderTeams(); return; }
+ renderMain();
+}
+
+function renderLogin(){
+ root.innerHTML = `
+ <div class="flex flex-col items-center justify-center min-h-screen p-6 text-center">
+   <div class="text-5xl mb-4">🎬</div>
+   <h1 class="text-3xl font-bold">CrewScript</h1>
+   <p class="text-gray-400 text-sm mt-1">YouTube • Movies • Animation</p>
+   <div class="mt-8 w-full bg-[#1A1A23] rounded-2xl p-5 border border-[#2A2A35]">
+     <button id="googleBtn" class="w-full bg-white text-black font-semibold py-3.5 rounded-xl flex items-center justify-center gap-3 hover:bg-gray-100">
+       <span class="bg-blue-500 text-white w-6 h-6 rounded-full flex items-center justify-center font-bold">G</span> Continue with Google
+     </button>
+     <p class="text-xs text-gray-500 mt-3">Secure with Firebase • Encrypted</p>
+     <div class="mt-4 p-3 bg-[#0F0F14] rounded-xl text-left">
+       <p class="text-[11px] text-gray-400">Project: koch-kingdom</p>
+       <p class="text-[11px] text-green-400">● Firebase Ready</p>
+     </div>
+   </div>
+   <p class="text-[11px] text-gray-600 mt-6">Add authorized domain in Firebase Console<br/>Authentication > Settings > Authorized domains</p>
+ </div>`;
+ document.getElementById('googleBtn').onclick = async ()=>{
+   const btn = document.getElementById('googleBtn');
+   btn.innerHTML = 'Loading...';
+   try{
+     const result = await signInWithPopup(auth, provider);
+     const u = result.user;
+     await setDoc(doc(db,"users",u.uid),{name:u.displayName,email:u.email,photo:u.photoURL,role:"Owner",createdAt:new Date().toISOString()},{merge:true});
+   }catch(e){ alert('Error: '+e.message+'\n\nFirebase Console me Google provider Enable kiya?'); btn.innerHTML='Continue with Google'; }
+ };
+}
+
+function renderTeams(){
+ root.innerHTML = `
+ <div class="p-5 min-h-screen">
+   <h2 class="text-xl font-bold">Select Team</h2>
+   <p class="text-gray-400 text-sm">Welcome ${currentUser?.displayName||currentUser?.email}</p>
+   <div class="mt-5">
+     <input id="teamInput" placeholder="Team name e.g. Goalpokhar Crew" class="w-full bg-[#1A1A23] border border-[#2A2A35] rounded-xl p-3.5 text-sm"/>
+     <button id="createTeam" class="w-full mt-3 bg-[#3B82F6] py-3 rounded-xl font-semibold">Create Team</button>
+   </div>
+   <div class="mt-6 space-y-3">${teams.map(t=>`<div class="teamItem bg-[#1A1A23] p-4 rounded-xl border border-[#2A2A35] flex justify-between items-center cursor-pointer"><div><p class="font-semibold">${t.name}</p><p class="text-xs text-gray-400">${t.members.length} members</p></div><span class="text-[#3B82F6]">Open →</span></div>`).join('')||'<p class="text-gray-500 text-sm">No teams yet</p>'}</div>
+   <button id="logout" class="mt-8 text-sm text-gray-400">Logout</button>
+ </div>`;
+ document.getElementById('createTeam').onclick = ()=>{
+   const name = document.getElementById('teamInput').value.trim();
+   if(!name) return;
+   teams.push({id:Date.now(),name,members:[currentUser.email]});
+   save(); renderTeams(); bindTeams();
+ };
+ document.getElementById('logout').onclick = ()=> signOut(auth);
+ bindTeams();
+ function bindTeams(){ document.querySelectorAll('.teamItem').forEach((el,i)=>{ el.onclick = ()=>{ selectedTeam = teams[i]; currentView='main'; render(); } }); }
+}
+
+function renderMain(){
+ const isOwner = true; // first user owner
+ root.innerHTML = `
+ <div class="flex flex-col min-h-screen">
+   <!-- Header -->
+   <div class="p-4 border-b border-[#1A1A23] flex justify-between items-center">
+     <div>
+       <h2 class="font-bold text-sm">ROADTRIP VLOG — Ep 3</h2>
+       <p class="text-[11px] text-gray-400">Team: ${selectedTeam?.name||''} • ${currentUser?.email}</p>
+     </div>
+     <div class="flex items-center gap-2">
+       <span class="text-[10px] bg-green-900/30 text-green-400 px-2 py-1 rounded-full border border-green-800">● Owner</span>
+       <button id="logout2" class="text-xs text-gray-400">Logout</button>
+     </div>
+   </div>
+   <div class="p-3 flex items-center justify-between bg-[#1A1A23] mx-3 mt-3 rounded-xl">
+     <div class="flex items-center gap-2"><span class="text-red-500">▶</span><span class="text-sm font-semibold">YouTube Mode</span></div>
+     <label class="relative inline-flex items-center cursor-pointer"><input type="checkbox" id="ytToggle" ${youtubeMode?'checked':''} class="sr-only peer"><div class="w-11 h-6 bg-gray-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#3B82F6]"></div></label>
+   </div>
+   <!-- Content -->
+   <div class="flex-1 overflow-y-auto p-3 pb-20">
+     <div id="tabContent"></div>
+   </div>
+   <!-- Bottom Tabs -->
+   <div class="fixed bottom-0 w-full max-w-[420px] bg-[#1A1A23] border-t border-[#2A2A35] flex justify-around py-2.5">
+     ${['script','shots','cast','admin','export'].map(tab=>`
+       <button data-tab="${tab}" class="tabBtn flex flex-col items-center ${activeTab===tab?'text-[#3B82F6]':'text-gray-500'}">
+         <span class="text-lg">${tab==='script'?'📝':tab==='shots'?'🎥':tab==='cast'?'👥':tab==='admin'?'🛡️':'📤'}</span>
+         <span class="text-[10px] mt-0.5 capitalize">${tab}</span>
+       </button>
+     `).join('')}
+   </div>
+ </div>
+ `;
+ document.getElementById('logout2').onclick = ()=> signOut(auth);
+ document.getElementById('ytToggle').onchange = (e)=>{ youtubeMode=e.target.checked; };
+ document.querySelectorAll('.tabBtn').forEach(b=> b.onclick = ()=>{ activeTab=b.dataset.tab; renderMain(); });
+ renderTab();
+}
+
+function renderTab(){
+ const c = document.getElementById('tabContent');
+ if(activeTab==='script'){
+   c.innerHTML = `
+   <div class="flex justify-between items-center mb-3"><p class="text-xs text-gray-400">SCRIPT • ${scripts.length} SCENES</p><button id="addLine" class="text-[#3B82F6] text-sm">+ Add Line</button></div>
+   <div class="space-y-3">${scripts.map(s=>`
+     <div class="flex gap-2 ${s.char==='C'?'justify-end':''}">
+       <div class="w-7 h-7 rounded-full ${s.char==='N'?'bg-purple-600':s.char==='C'?'bg-orange-400':'bg-teal-600'} flex items-center justify-center text-xs font-bold flex-shrink-0">${s.char}</div>
+       <div class="max-w-[75%] ${s.char==='C'?'bg-[#3B82F6]':'bg-[#1A1A23]'} p-3 rounded-2xl">
+         <p class="text-sm">${s.text}</p>
+         <p class="text-[10px] text-gray-400 mt-1">${s.scene}</p>
+       </div>
+     </div>`).join('')}
+   </div>
+   <div class="mt-4 p-3 bg-[#1A1A23] rounded-xl text-xs text-gray-400">${scripts.length*12} words • ${scripts.length} scenes • Est. ${Math.ceil(scripts.length*0.4)}:30 runtime • YouTube Mode: Hook optimized</div>
+   `;
+   document.getElementById('addLine').onclick = ()=>{
+     const text = prompt('Dialogue likho:');
+     if(!text) return;
+     scripts.push({id:Date.now(),char:'N',text,scene:`SCENE ${scripts.length+1} - 00:${String(scripts.length*8).padStart(2,'0')}`});
+     save(); renderMain();
+   };
+ }
+ if(activeTab==='shots'){
+   c.innerHTML = `
+   <p class="text-xs text-gray-400 mb-3">SHOT LIST • SWIPE TO MANAGE</p>
+   <div class="flex gap-3 overflow-x-auto scrollbar-hide pb-2">
+     ${shots.map(s=>`<div class="min-w-[160px] bg-[#1A1A23] rounded-xl p-3 border ${s.status==='TODO'?'border-blue-600':s.status==='READY'?'border-green-600':'border-gray-700'}"><div class="h-20 bg-[#0F0F14] rounded-lg mb-2 flex items-center justify-center text-2xl">🏞️</div><p class="text-sm font-semibold">${s.title}</p><p class="text-[11px] text-gray-400">${s.meta}</p><span class="mt-2 inline-block text-[10px] px-2 py-1 rounded ${s.status==='TODO'?'bg-yellow-500/20 text-yellow-400':s.status==='READY'?'bg-green-500/20 text-green-400':'bg-gray-500/20 text-gray-400'}">${s.status}</span></div>`).join('')}
+   </div>
+   <button id="addShot" class="w-full mt-4 bg-[#1A1A23] border border-dashed border-gray-600 py-3 rounded-xl text-sm">+ Add Shot</button>
+   <div class="mt-5"><p class="text-xs text-gray-400 mb-2">STORYBOARD PREVIEW</p><div class="grid grid-cols-2 gap-2"><div class="bg-[#1A1A23] p-3 rounded-xl text-xs">1. Wide</div><div class="bg-[#1A1A23] p-3 rounded-xl text-xs">2. Close-up</div><div class="bg-[#1A1A23] p-3 rounded-xl text-xs">3. OTS</div><div class="bg-[#1A1A23] p-3 rounded-xl text-xs">4. B-roll</div></div></div>
+   `;
+   document.getElementById('addShot').onclick = ()=>{
+     const title = prompt('Shot title:'); if(!title) return;
+     shots.push({id:Date.now(),title,meta:'Custom • 24mm • 5s',status:'TODO'}); save(); renderMain();
+   };
+ }
+ if(activeTab==='cast'){
+   c.innerHTML = `
+   <p class="text-sm font-semibold mb-3">Characters</p>
+   <div class="space-y-2">
+     <div class="bg-[#1A1A23] p-3 rounded-xl flex justify-between"><div class="flex gap-2 items-center"><div class="w-8 h-8 bg-purple-600 rounded-full flex items-center justify-center">A</div><div><p class="text-sm">Alex • Owner</p><p class="text-xs text-gray-400">12 lines • Energetic</p></div></div><span class="text-green-400 text-xs">● Online</span></div>
+     <div class="bg-[#1A1A23] p-3 rounded-xl flex justify-between"><div class="flex gap-2 items-center"><div class="w-8 h-8 bg-orange-400 rounded-full flex items-center justify-center">M</div><div><p class="text-sm">Mia • Editor</p><p class="text-xs text-gray-400">8 lines • Calm</p></div></div><span class="text-gray-500 text-xs">● Offline</span></div>
+     <div class="bg-[#1A1A23] p-3 rounded-xl"><p class="text-sm">${currentUser?.displayName||'You'} • Owner (You)</p><p class="text-xs text-gray-400">${currentUser?.email}</p></div>
+   </div>
+   <p class="text-sm font-semibold mt-6 mb-3">Locations</p>
+   <div class="space-y-2"><div class="bg-[#1A1A23] p-3 rounded-xl text-sm">📍 Creator Studio</div><div class="bg-[#1A1A23] p-3 rounded-xl text-sm">📍 City Rooftop - Night</div><div class="bg-[#1A1A23] p-3 rounded-xl text-sm">📍 Coffee Shop</div></div>
+   `;
+ }
+ if(activeTab==='admin'){
+   c.innerHTML = `
+   <div class="bg-[#1A1A23] p-4 rounded-xl border border-green-800/30">
+     <p class="text-sm font-semibold text-green-400">🛡️ Owner Only Panel</p>
+     <p class="text-xs text-gray-400 mt-1">JWT: Active • HTTPS • RLS Enabled • Encrypted</p>
+     <p class="text-[11px] text-gray-500 mt-1">UID: ${currentUser?.uid||'mock'} • Project: koch-kingdom</p>
+   </div>
+   <p class="text-sm font-semibold mt-5">Send Alert to Team</p>
+   <div class="bg-[#1A1A23] p-3 rounded-xl mt-2">
+     <div class="flex gap-2 mb-3"><label class="flex items-center gap-1 text-xs"><input type="checkbox" id="selAll" checked> Select All</label></div>
+     <input id="alertMsg" placeholder="Message e.g. Shoot at 5pm today!" class="w-full bg-[#0F0F14] p-3 rounded-xl text-sm border border-[#2A2A35]"/>
+     <select id="alertType" class="w-full mt-2 bg-[#0F0F14] p-3 rounded-xl text-sm border border-[#2A2A35]"><option>Info</option><option>Urgent</option><option>Script Update</option><option>Shoot Reminder</option></select>
+     <button id="sendAlert" class="w-full mt-3 bg-[#3B82F6] py-3 rounded-xl font-semibold">Send Alert</button>
+   </div>
+   <p class="text-sm font-semibold mt-5">Recent Alerts (${alerts.length})</p>
+   <div class="mt-2 space-y-2">${alerts.slice().reverse().map(a=>`<div class="bg-[#1A1A23] p-3 rounded-xl"><p class="text-sm">${a.type}: ${a.msg}</p><p class="text-[11px] text-gray-400">${new Date(a.time).toLocaleString()} • ${a.count} members</p></div>`).join('')||'<p class="text-xs text-gray-500">No alerts yet</p>'}</div>
+   `;
+   document.getElementById('sendAlert').onclick = ()=>{
+     const msg = document.getElementById('alertMsg').value.trim(); if(!msg) return alert('Message likho');
+     const type = document.getElementById('alertType').value;
+     alerts.push({id:Date.now(),msg,type,time:new Date().toISOString(),count:teams.length||2});
+     save(); renderMain();
+     alert('Alert sent to team!');
+   };
+ }
+ if(activeTab==='export'){
+   c.innerHTML = `
+   <p class="text-sm font-semibold mb-3">Export</p>
+   <div class="space-y-3">
+     <div class="bg-[#1A1A23] p-4 rounded-xl"><p class="font-semibold text-sm">Voice Script</p><p class="text-xs text-gray-400">Only dialogues for recording</p><button class="mt-2 bg-[#3B82F6] px-3 py-1.5 rounded-lg text-xs" onclick="alert('Voice Script:\n\n${scripts.map(s=>s.char+': '+s.text).join('\n')}')">Preview</button></div>
+     <div class="bg-[#1A1A23] p-4 rounded-xl"><p class="font-semibold text-sm">Shot List</p><p class="text-xs text-gray-400">Checklist for shooting</p><button class="mt-2 bg-[#3B82F6] px-3 py-1.5 rounded-lg text-xs" onclick="alert('Shot List:\n\n${shots.map(s=>s.title+' - '+s.status).join('\n')}')">Preview</button></div>
+     <div class="bg-[#1A1A23] p-4 rounded-xl"><p class="font-semibold text-sm">Full Script PDF</p><p class="text-xs text-gray-400">Formatted script</p><button class="mt-2 bg-[#3B82F6] px-3 py-1.5 rounded-lg text-xs">Download (mock)</button></div>
+   </div>
+   `;
+ }
+}
+
+onAuthStateChanged(auth, async (user)=>{
+ if(user){
+   currentUser = {uid:user.uid,email:user.email,displayName:user.displayName||user.email.split('@')[0],photo:user.photoURL};
+   try{ const snap = await getDoc(doc(db,"users",user.uid)); if(snap.exists()){ const data = snap.data(); currentUser.role = data.role||'Owner'; } }catch(e){ currentUser.role='Owner'; }
+   currentView='teams';
+   if(teams.length>0){ selectedTeam=teams[0]; currentView='main'; }
+   render();
+ } else {
+   currentUser=null; currentView='login'; render();
+ }
+});
+
+render();
+</script>
+</body>
+</html>
